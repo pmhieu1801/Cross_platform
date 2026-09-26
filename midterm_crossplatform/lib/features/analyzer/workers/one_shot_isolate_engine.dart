@@ -1,11 +1,9 @@
-import 'dart:isolate';
-
 import '../data/data_record.dart';
-import '../domain/data_processor.dart';
 import '../domain/processing_engine.dart';
 import '../domain/processing_metrics.dart';
 import '../domain/processing_mode.dart';
 import '../domain/processing_result.dart';
+import 'isolate_worker.dart';
 
 class OneShotIsolateEngine implements ProcessingEngine {
   const OneShotIsolateEngine();
@@ -16,15 +14,20 @@ class OneShotIsolateEngine implements ProcessingEngine {
   @override
   Future<ProcessingResult> process(List<DataRecord> records) async {
     final totalStopwatch = Stopwatch()..start();
+    IsolateWorkerConnection? worker;
 
     try {
-      // Only the sendable record list is captured by the isolate callback.
-      final workerResult = await Isolate.run(() => _processRecords(records));
+      worker = await IsolateWorkerConnection.start();
+      final reply = await worker.process(records);
       totalStopwatch.stop();
 
-      return workerResult.copyWith(
-        metrics: workerResult.metrics!.copyWith(
+      return reply.result.copyWith(
+        metrics: ProcessingMetrics(
+          mode: mode,
+          inputRecordCount: records.length,
+          processingDuration: reply.processingDuration,
           totalDuration: totalStopwatch.elapsed,
+          isolateStartupDuration: worker.startupDuration,
         ),
       );
     } catch (error, stackTrace) {
@@ -34,21 +37,8 @@ class OneShotIsolateEngine implements ProcessingEngine {
         cause: error,
         stackTrace: stackTrace,
       );
+    } finally {
+      worker?.close();
     }
   }
-}
-
-ProcessingResult _processRecords(List<DataRecord> records) {
-  final processingStopwatch = Stopwatch()..start();
-  final result = const DataProcessor().process(records);
-  processingStopwatch.stop();
-
-  return result.copyWith(
-    metrics: ProcessingMetrics(
-      mode: ProcessingMode.oneShotIsolate,
-      inputRecordCount: records.length,
-      processingDuration: processingStopwatch.elapsed,
-      totalDuration: processingStopwatch.elapsed,
-    ),
-  );
 }
