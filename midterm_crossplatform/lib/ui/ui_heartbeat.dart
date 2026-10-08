@@ -40,7 +40,7 @@ class _UIHeartbeatState extends State<UIHeartbeat>
   Duration _lastTick = Duration.zero;
 
   // ── 30-sample sparkline history ───────────────────────────────────────────
-  final List<double> _history = List.filled(30, 60.0);
+  final List<double> _history = List.filled(30, 60.0, growable: true);
 
   @override
   void initState() {
