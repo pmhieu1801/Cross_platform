@@ -16,6 +16,7 @@ import '../domain/processing_result.dart';
 import '../workers/main_isolate_engine.dart';
 import '../workers/one_shot_isolate_engine.dart';
 import '../workers/persistent_isolate_engine.dart';
+import '../../../ui/ui_heartbeat.dart';
 
 enum AnalyzerViewState { idle, processing, success, error }
 
@@ -60,6 +61,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   bool _loadingDataset = false;
   final _modeRuns = <ProcessingMode, int>{};
 
+  // ── Live log (hnt) ────────────────────────────────────────────────────────
+  final List<String> _liveLogs = [];
+  final ScrollController _logScrollController = ScrollController();
+
   @override
   void dispose() {
     for (final engine in _engines.values) {
@@ -69,7 +74,33 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     _seedController.dispose();
     _sizesController.dispose();
     _repetitionsController.dispose();
+    _logScrollController.dispose();
     super.dispose();
+  }
+
+  // ── Live log helpers (hnt) ──────────────────────────────────────────────
+  void _addLog(String message) {
+    if (!mounted) return;
+    setState(() {
+      _liveLogs.add('[${_timestamp()}] $message');
+      if (_liveLogs.length > 100) _liveLogs.removeAt(0);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_logScrollController.hasClients) {
+        _logScrollController.animateTo(
+          _logScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  String _timestamp() {
+    final now = DateTime.now();
+    return '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}';
   }
 
   ProcessingEngine _engineFor(ProcessingMode mode) {
@@ -97,6 +128,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   }
 
   Future<void> _generateDataset() async {
+    _addLog('Generating dataset…');
     setState(() {
       _loadingDataset = true;
       _errorMessage = null;
@@ -104,6 +136,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     try {
       final count = _readPositiveInt(_datasetSizeController, 'Record count');
       final seed = _readSeed();
+      _addLog('Spawning compute isolate — seed=$seed, count=$count');
       final generated = widget.datasetGenerationCallback != null
           ? await widget.datasetGenerationCallback!(seed, count)
           : await compute<(int, int), List<DataRecord>>(
@@ -111,6 +144,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
               (seed, count),
             );
       if (!mounted) return;
+      _addLog('✓ Dataset ready — ${generated.length} records generated');
       setState(() {
         _records = generated;
         _sourceLabel = 'Generated dataset';
@@ -172,6 +206,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
     final mode = _selectedMode;
     final runNumber = (_modeRuns[mode] ?? 0) + 1;
+    _addLog('▶ Starting ${_modeLabel(mode)} — ${_records.length} records, run #$runNumber');
     setState(() {
       _viewState = AnalyzerViewState.processing;
       _errorMessage = null;
@@ -186,6 +221,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         runNumber: runNumber,
       );
       if (!mounted) return;
+      final m = result.metrics!;
+      _addLog('✓ Done — processing: ${_formatDuration(m.processingDuration)}, '
+          'total: ${_formatDuration(m.totalDuration)}, '
+          '${result.statistics.completedRecordCount} completed records');
       setState(() {
         _modeRuns[mode] = runNumber;
         _result = result;
@@ -266,6 +305,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
   void _setError(Object error) {
     if (!mounted) return;
+    _addLog('✗ Error: $error');
     setState(() {
       _viewState = AnalyzerViewState.error;
       _errorMessage = error.toString();
@@ -324,6 +364,12 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 if (_viewState == AnalyzerViewState.error) _buildErrorPanel(),
                 if (_result != null) _buildResultPanel(_result!),
                 if (_benchmarks.isNotEmpty) _buildBenchmarkPanel(),
+                const SizedBox(height: 14),
+                _buildFpsPanel(),
+                if (_liveLogs.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  _buildLiveLogPanel(),
+                ],
               ],
             ),
           ),
@@ -558,6 +604,112 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── FPS Monitor panel (hnt) ───────────────────────────────────────────────
+  Widget _buildFpsPanel() {
+    return _Panel(
+      title: '05  UI Thread Monitor',
+      trailing: const Tooltip(
+        message:
+            'Isolate mode keeps FPS ~60.\nMain-thread mode blocks the event loop \u2192 FPS drops.',
+        child: Icon(Icons.info_outline, size: 16, color: Color(0xFF53655F)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const UIHeartbeat(),
+          const SizedBox(width: 24),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 8),
+                Text(
+                  'Watching the UI thread',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: const Color(0xFF183A36),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '\u2022 One-shot / Persistent Isolate: heavy work runs off the main thread \u2014 '
+                  'the AnimationController keeps ticking, FPS stays ~60.\n\n'
+                  '\u2022 Main Isolate: the synchronous DataProcessor.process() blocks the '
+                  'event loop \u2014 frames cannot be scheduled, FPS drops to 0 until the '
+                  'call returns.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF53655F),
+                    height: 1.6,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Live Log panel (hnt) ───────────────────────────────────────────────────
+  Widget _buildLiveLogPanel() {
+    return _Panel(
+      title: '06  Live Log',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '${_liveLogs.length} entries',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF53655F)),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Clear log',
+            icon: const Icon(Icons.delete_outline, size: 18),
+            onPressed: () => setState(() => _liveLogs.clear()),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+        ],
+      ),
+      child: SizedBox(
+        height: 200,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1117),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: ListView.builder(
+            controller: _logScrollController,
+            padding: const EdgeInsets.all(12),
+            itemCount: _liveLogs.length,
+            itemBuilder: (context, index) {
+              final log = _liveLogs[index];
+              final color = log.contains('\u2713')
+                  ? const Color(0xFF22C55E)
+                  : log.contains('\u2717')
+                      ? const Color(0xFFEF4444)
+                      : log.contains('\u25b6')
+                          ? const Color(0xFF60A5FA)
+                          : const Color(0xFF94A3B8);
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  log,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: color,
+                    height: 1.5,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
