@@ -4,6 +4,7 @@
 *.pyc
 *.swp
 .DS_Store
+.env
 .atom/
 .build/
 .buildlog/
@@ -17,6 +18,8 @@ migrate_working_dir/
 *.ipr
 *.iws
 .idea/
+*.keystore
+key.properties
 
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line

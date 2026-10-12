@@ -19,18 +19,25 @@ typedef BenchmarkProgress = void Function(
   int run,
 );
 
+typedef BenchmarkEngineFactory = ProcessingEngine Function(ProcessingMode mode);
+
 class BenchmarkRunner {
-  const BenchmarkRunner({this.generator = const DatasetGenerator()});
+  const BenchmarkRunner({
+    this.generator = const DatasetGenerator(),
+    this.engineFactory,
+  });
 
   static Future<String>? _deviceInfoFuture;
 
   final DatasetGenerator generator;
+  final BenchmarkEngineFactory? engineFactory;
 
   Future<ProcessingResult> process({
     required List<DataRecord> records,
     required ProcessingEngine engine,
     required int seed,
     required int runNumber,
+    int warmUpRuns = 0,
     String? deviceInfo,
     String? buildMode,
   }) async {
@@ -44,6 +51,7 @@ class BenchmarkRunner {
       metrics: metrics.copyWith(
         runNumber: runNumber,
         seed: seed,
+        warmUpRuns: warmUpRuns,
         deviceInfo: resolvedDeviceInfo,
         buildMode: buildMode ?? _buildMode,
       ),
@@ -53,6 +61,7 @@ class BenchmarkRunner {
   Future<List<BenchmarkRecord>> runProtocol({
     required List<int> datasetSizes,
     required int repetitions,
+    int warmUpRuns = 0,
     int seed = DatasetGenerator.defaultSeed,
     List<ProcessingMode> modes = ProcessingMode.values,
     String? deviceInfo,
@@ -65,14 +74,20 @@ class BenchmarkRunner {
     if (repetitions < 1) {
       throw ArgumentError.value(repetitions, 'repetitions');
     }
+    if (warmUpRuns < 0) {
+      throw ArgumentError.value(warmUpRuns, 'warmUpRuns');
+    }
 
     final entries = <BenchmarkRecord>[];
     for (final mode in modes) {
-      final engine = _createEngine(mode);
+      final engine = engineFactory?.call(mode) ?? _createEngine(mode);
       var runNumber = 0;
       try {
         for (final size in datasetSizes) {
           final records = generator.generate(seed: seed, numberOfRecords: size);
+          for (var warmUp = 0; warmUp < warmUpRuns; warmUp++) {
+            await engine.process(records);
+          }
           for (var run = 1; run <= repetitions; run++) {
             onProgress?.call(mode, size, run);
             final result = await process(
@@ -80,6 +95,7 @@ class BenchmarkRunner {
               engine: engine,
               seed: seed,
               runNumber: ++runNumber,
+              warmUpRuns: warmUpRuns,
               deviceInfo: deviceInfo,
               buildMode: buildMode,
             );

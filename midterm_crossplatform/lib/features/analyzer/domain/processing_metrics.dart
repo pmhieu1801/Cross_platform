@@ -10,6 +10,7 @@ class ProcessingMetrics {
     this.isolateStartupDuration = Duration.zero,
     this.runNumber = 1,
     this.seed = 42,
+    this.warmUpRuns = 0,
     this.deviceInfo = 'unknown',
     this.buildMode = 'unknown',
   });
@@ -23,6 +24,7 @@ class ProcessingMetrics {
   final Duration isolateStartupDuration;
   final int runNumber;
   final int seed;
+  final int warmUpRuns;
   final String deviceInfo;
   final String buildMode;
 
@@ -39,6 +41,7 @@ class ProcessingMetrics {
     Duration? isolateStartupDuration,
     int? runNumber,
     int? seed,
+    int? warmUpRuns,
     String? deviceInfo,
     String? buildMode,
   }) {
@@ -51,6 +54,7 @@ class ProcessingMetrics {
           isolateStartupDuration ?? this.isolateStartupDuration,
       runNumber: runNumber ?? this.runNumber,
       seed: seed ?? this.seed,
+      warmUpRuns: warmUpRuns ?? this.warmUpRuns,
       deviceInfo: deviceInfo ?? this.deviceInfo,
       buildMode: buildMode ?? this.buildMode,
     );

@@ -1,13 +1,17 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:midterm_crossplatform/features/analyzer/data/data_record.dart';
 import 'package:midterm_crossplatform/features/analyzer/data/dataset_generator.dart';
 import 'package:midterm_crossplatform/features/analyzer/data/dataset_importer.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/benchmark_record.dart';
+import 'package:midterm_crossplatform/features/analyzer/domain/benchmark_runner.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/data_processor.dart';
+import 'package:midterm_crossplatform/features/analyzer/domain/processing_engine.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/processing_metrics.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/processing_mode.dart';
+import 'package:midterm_crossplatform/features/analyzer/domain/processing_result.dart';
 import 'package:midterm_crossplatform/features/analyzer/workers/main_isolate_engine.dart';
 import 'package:midterm_crossplatform/features/analyzer/workers/one_shot_isolate_engine.dart';
 import 'package:midterm_crossplatform/features/analyzer/workers/persistent_isolate_engine.dart';
@@ -25,6 +29,25 @@ void main() {
   });
 
   group('DatasetImporter', () {
+    test('repository CSV and JSON samples use the same valid schema', () {
+      const importer = DatasetImporter();
+      final csvRecords = importer.fromCsv(
+        File('assets/sample_data/sample.csv').readAsStringSync(),
+      );
+      final jsonSource = File('assets/sample_data/sample.json')
+          .readAsStringSync();
+      final jsonRows = jsonDecode(jsonSource) as List<dynamic>;
+      final jsonRecords = importer.fromJson(jsonSource);
+
+      expect(jsonRows, isNotEmpty);
+      expect(
+        (jsonRows.first as Map<String, dynamic>).keys.toSet(),
+        DatasetImporter.fields.toSet(),
+      );
+      expect(csvRecords, jsonRecords);
+      expect(csvRecords, hasLength(6));
+    });
+
     test('normalizes CSV columns into DataRecord values', () {
       const csv =
           'category,id,timestamp,region,status,quantity,price,processingTime\n'
@@ -179,6 +202,91 @@ void main() {
     );
     expect(BenchmarkRecord.encodeCsv([record]), contains('test device'));
   });
+
+  test(
+    'benchmark warm-ups are not recorded and recorded runs stay deterministic',
+    () async {
+      final generator = _RecordingDatasetGenerator();
+      final engine = _CountingEngine();
+      final runner = BenchmarkRunner(
+        generator: generator,
+        engineFactory: (_) => engine,
+      );
+
+      final records = await runner.runProtocol(
+        datasetSizes: const [3, 5],
+        repetitions: 2,
+        warmUpRuns: 1,
+        seed: 77,
+        modes: const [ProcessingMode.mainIsolate],
+        deviceInfo: 'test device',
+        buildMode: 'profile',
+      );
+
+      expect(engine.processCalls, 6);
+      expect(records, hasLength(4));
+      expect(records.map((record) => record.metrics.runNumber), [1, 2, 3, 4]);
+      expect(records.map((record) => record.metrics.inputRecordCount), [
+        3,
+        3,
+        5,
+        5,
+      ]);
+      expect(records.map((record) => record.metrics.seed), everyElement(77));
+      expect(
+        records.map((record) => record.metrics.warmUpRuns),
+        everyElement(1),
+      );
+      expect(generator.requests, [(77, 3), (77, 5)]);
+    },
+  );
+
+  test('benchmark rejects a negative warm-up count', () async {
+    await expectLater(
+      const BenchmarkRunner().runProtocol(
+        datasetSizes: [1],
+        repetitions: 1,
+        warmUpRuns: -1,
+        modes: [ProcessingMode.mainIsolate],
+      ),
+      throwsArgumentError,
+    );
+  });
+}
+
+class _RecordingDatasetGenerator extends DatasetGenerator {
+  final List<(int, int)> requests = [];
+
+  @override
+  List<DataRecord> generate({
+    int seed = DatasetGenerator.defaultSeed,
+    int numberOfRecords = DatasetGenerator.defaultRecordCount,
+  }) {
+    requests.add((seed, numberOfRecords));
+    return super.generate(seed: seed, numberOfRecords: numberOfRecords);
+  }
+}
+
+class _CountingEngine implements ProcessingEngine {
+  int processCalls = 0;
+
+  @override
+  ProcessingMode get mode => ProcessingMode.mainIsolate;
+
+  @override
+  Future<ProcessingResult> process(List<DataRecord> records) async {
+    processCalls++;
+    return const DataProcessor()
+        .process(records)
+        .copyWith(
+          metrics: ProcessingMetrics(
+            mode: mode,
+            inputRecordCount: records.length,
+            processingDuration: const Duration(microseconds: 1),
+            totalDuration: const Duration(microseconds: 1),
+          ),
+        );
+  }
 }
 
 DataRecord _record({

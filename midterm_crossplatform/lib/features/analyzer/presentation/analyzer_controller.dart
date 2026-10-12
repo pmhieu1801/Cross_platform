@@ -211,6 +211,7 @@ class AnalyzerController extends ChangeNotifier {
     required List<int> sizes,
     required int repetitions,
     required int seed,
+    int warmUpRuns = 1,
   }) async {
     if (sizes.isEmpty || sizes.any((size) => size < 1)) {
       reportError(
@@ -224,10 +225,18 @@ class AnalyzerController extends ChangeNotifier {
       );
       return;
     }
+    if (warmUpRuns < 0) {
+      reportError(
+        const FormatException(
+          'Warm-up runs must be zero or a positive number.',
+        ),
+      );
+      return;
+    }
 
     _state = AnalyzerState.processing;
     _errorMessage = null;
-    _progressMessage = 'Preparing benchmark sweep';
+    _progressMessage = 'Preparing benchmark sweep ($warmUpRuns warm-up runs)';
     _notify();
 
     await Future<void>.delayed(Duration.zero);
@@ -235,6 +244,7 @@ class AnalyzerController extends ChangeNotifier {
       final entries = await benchmarkRunner.runProtocol(
         datasetSizes: sizes,
         repetitions: repetitions,
+        warmUpRuns: warmUpRuns,
         seed: seed,
         deviceInfo: deviceInfo,
         onProgress: (mode, size, run) {

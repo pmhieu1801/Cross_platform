@@ -1,0 +1,7 @@
+id,timestamp,category,region,status,quantity,price,processingTime
+1,2026-01-15T08:30:00.000Z,Electronics,North,Completed,2,499.99,12.5
+2,2026-01-15T09:15:00.000Z,Books,South,Pending,3,18.50,4.2
+3,2026-01-16T10:00:00.000Z,Home,East,Completed,1,129.00,8.75
+4,2026-01-16T11:45:00.000Z,Clothing,West,Cancelled,4,35.25,6.0
+5,2026-01-17T13:20:00.000Z,Books,North,Completed,5,22.40,5.5
+6,2026-01-18T14:10:00.000Z,Electronics,South,Completed,1,899.95,15.25

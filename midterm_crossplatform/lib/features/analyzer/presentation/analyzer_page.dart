@@ -31,6 +31,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     text: '25000,50000,100000,250000',
   );
   final _repetitionsController = TextEditingController(text: '1');
+  final _warmUpRunsController = TextEditingController(text: '1');
 
   // ── Live log (hnt) ────────────────────────────────────────────────────────
   final ScrollController _logScrollController = ScrollController();
@@ -84,6 +85,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     _seedController.dispose();
     _sizesController.dispose();
     _repetitionsController.dispose();
+    _warmUpRunsController.dispose();
     _logScrollController.dispose();
     super.dispose();
   }
@@ -93,6 +95,14 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final value = int.tryParse(controller.text.trim());
     if (value == null || value < 1) {
       throw FormatException('$label must be a positive whole number.');
+    }
+    return value;
+  }
+
+  int _readNonNegativeInt(TextEditingController controller, String label) {
+    final value = int.tryParse(controller.text.trim());
+    if (value == null || value < 0) {
+      throw FormatException('$label must be zero or a positive whole number.');
     }
     return value;
   }
@@ -136,10 +146,15 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         'Repetitions',
       );
       final seed = _readSeed();
+      final warmUpRuns = _readNonNegativeInt(
+        _warmUpRunsController,
+        'Warm-up runs',
+      );
       await _controller.runBenchmarkSweep(
         sizes: sizes,
         repetitions: repetitions,
         seed: seed,
+        warmUpRuns: warmUpRuns,
       );
     } catch (error) {
       _controller.reportError(error);
@@ -415,12 +430,20 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 controller: _repetitionsController,
                 enabled: !busy,
               );
+              final warmUpRunsField = _numberField(
+                key: const Key('warm-up-runs-input'),
+                label: 'Warm-up runs',
+                controller: _warmUpRunsController,
+                enabled: !busy,
+              );
               return constraints.maxWidth < 650
                   ? Column(
                       children: [
                         sizesField,
                         const SizedBox(height: 10),
                         repetitionsField,
+                        const SizedBox(height: 10),
+                        warmUpRunsField,
                       ],
                     )
                   : Row(
@@ -428,6 +451,8 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                         Expanded(flex: 3, child: sizesField),
                         const SizedBox(width: 12),
                         Expanded(child: repetitionsField),
+                        const SizedBox(width: 12),
+                        Expanded(child: warmUpRunsField),
                       ],
                     );
             },
