@@ -17,6 +17,7 @@ class PersistentIsolateEngine implements ProcessingEngine {
   _WorkerSession? _session;
   Future<void>? _initialization;
   int _nextRequestId = 0;
+  int _runNumber = 0;
   bool _disposed = false;
 
   @override
@@ -41,6 +42,7 @@ class PersistentIsolateEngine implements ProcessingEngine {
 
       final workerResult = await response.future;
       totalStopwatch.stop();
+      _runNumber++;
 
       return workerResult.result.copyWith(
         metrics: ProcessingMetrics(
@@ -48,6 +50,8 @@ class PersistentIsolateEngine implements ProcessingEngine {
           inputRecordCount: records.length,
           processingDuration: workerResult.processingDuration,
           totalDuration: totalStopwatch.elapsed,
+          isolateStartupDuration: session.takeStartupDuration(),
+          runNumber: _runNumber,
         ),
       );
     } catch (error, stackTrace) {
@@ -86,6 +90,7 @@ class PersistentIsolateEngine implements ProcessingEngine {
   }
 
   Future<void> _startWorker() async {
+    final startupStopwatch = Stopwatch()..start();
     final session = _WorkerSession();
     _session = session;
 
@@ -115,6 +120,8 @@ class PersistentIsolateEngine implements ProcessingEngine {
       }
 
       await session.ready.future;
+      startupStopwatch.stop();
+      session.startupDuration = startupStopwatch.elapsed;
       if (_disposed) {
         throw StateError(
           'PersistentIsolateEngine was disposed during initialization.',
@@ -279,6 +286,9 @@ class PersistentIsolateEngine implements ProcessingEngine {
       _closeSession(session, killWorker: true);
     }
   }
+
+  /// Compatibility alias used by the UI and benchmark runner for cleanup.
+  Future<void> close() => dispose();
 }
 
 class _WorkerSession {
@@ -293,8 +303,18 @@ class _WorkerSession {
   StreamSubscription<Object?>? responseSubscription;
   StreamSubscription<Object?>? errorSubscription;
   StreamSubscription<Object?>? exitSubscription;
+  Duration startupDuration = Duration.zero;
+  bool startupDurationPending = true;
   bool closing = false;
   bool terminated = false;
+
+  Duration takeStartupDuration() {
+    if (!startupDurationPending) {
+      return Duration.zero;
+    }
+    startupDurationPending = false;
+    return startupDuration;
+  }
 }
 
 class _ProcessRequest {

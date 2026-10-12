@@ -15,7 +15,7 @@ class DataProcessor {
   const DataProcessor();
 
   ProcessingResult process(List<DataRecord> records) {
-    _validate(records);
+    validate(records);
 
     final completedRecords = records
         .where((record) => record.status == 'Completed')
@@ -68,7 +68,7 @@ class DataProcessor {
     );
   }
 
-  void _validate(List<DataRecord> records) {
+  void validate(List<DataRecord> records) {
     for (var index = 0; index < records.length; index++) {
       final record = records[index];
       final prefix = 'Record at index $index (id ${record.id})';

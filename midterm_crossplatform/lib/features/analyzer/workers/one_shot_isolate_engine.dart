@@ -18,13 +18,22 @@ class OneShotIsolateEngine implements ProcessingEngine {
     final totalStopwatch = Stopwatch()..start();
 
     try {
-      // Only the sendable record list is captured by the isolate callback.
       final workerResult = await Isolate.run(() => _processRecords(records));
       totalStopwatch.stop();
+      final oneShotOverhead =
+          totalStopwatch.elapsed - workerResult.processingDuration;
 
-      return workerResult.copyWith(
-        metrics: workerResult.metrics!.copyWith(
+      return workerResult.result.copyWith(
+        metrics: ProcessingMetrics(
+          mode: mode,
+          inputRecordCount: records.length,
+          processingDuration: workerResult.processingDuration,
           totalDuration: totalStopwatch.elapsed,
+          // Isolate.run does not expose startup separately. This is the
+          // closest observable startup and message-passing overhead.
+          isolateStartupDuration: oneShotOverhead.isNegative
+              ? Duration.zero
+              : oneShotOverhead,
         ),
       );
     } catch (error, stackTrace) {
@@ -38,17 +47,17 @@ class OneShotIsolateEngine implements ProcessingEngine {
   }
 }
 
-ProcessingResult _processRecords(List<DataRecord> records) {
+class _OneShotWorkerResult {
+  const _OneShotWorkerResult(this.result, this.processingDuration);
+
+  final ProcessingResult result;
+  final Duration processingDuration;
+}
+
+_OneShotWorkerResult _processRecords(List<DataRecord> records) {
   final processingStopwatch = Stopwatch()..start();
   final result = const DataProcessor().process(records);
   processingStopwatch.stop();
 
-  return result.copyWith(
-    metrics: ProcessingMetrics(
-      mode: ProcessingMode.oneShotIsolate,
-      inputRecordCount: records.length,
-      processingDuration: processingStopwatch.elapsed,
-      totalDuration: processingStopwatch.elapsed,
-    ),
-  );
+  return _OneShotWorkerResult(result, processingStopwatch.elapsed);
 }
