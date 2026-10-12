@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../data/data_record.dart';
 import '../domain/data_processor.dart';
 import '../domain/processing_engine.dart';
@@ -10,15 +12,25 @@ import '../domain/processing_result.dart';
 
 /// A single long-lived worker isolate that processes requests sequentially.
 class PersistentIsolateEngine implements ProcessingEngine {
-  PersistentIsolateEngine();
+  PersistentIsolateEngine() : _workerEntrypoint = _persistentWorkerMain;
+
+  @visibleForTesting
+  PersistentIsolateEngine.withWorkerEntrypoint(
+    void Function(SendPort) workerEntrypoint,
+  ) : _workerEntrypoint = workerEntrypoint;
 
   final Map<int, Completer<_WorkerSuccess>> _pendingRequests = {};
+  final void Function(SendPort) _workerEntrypoint;
 
   _WorkerSession? _session;
   Future<void>? _initialization;
   int _nextRequestId = 0;
   int _runNumber = 0;
+  int _workerSpawnCount = 0;
   bool _disposed = false;
+
+  @visibleForTesting
+  int get debugWorkerSpawnCount => _workerSpawnCount;
 
   @override
   ProcessingMode get mode => ProcessingMode.persistentIsolate;
@@ -106,7 +118,7 @@ class PersistentIsolateEngine implements ProcessingEngine {
 
     try {
       final isolate = await Isolate.spawn<SendPort>(
-        _persistentWorkerMain,
+        _workerEntrypoint,
         session.responses.sendPort,
         onError: session.errors.sendPort,
         onExit: session.exits.sendPort,
@@ -114,6 +126,7 @@ class PersistentIsolateEngine implements ProcessingEngine {
         debugName: 'dataflow-persistent-worker',
       );
       session.isolate = isolate;
+      _workerSpawnCount++;
 
       if (session.terminated) {
         isolate.kill(priority: Isolate.immediate);

@@ -1,3 +1,5 @@
+import 'dart:isolate';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:midterm_crossplatform/features/analyzer/data/data_record.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/data_processor.dart';
@@ -83,17 +85,89 @@ void main() {
       expect(mainResult.metrics!.mode, isNot(persistentResult.metrics!.mode));
     });
 
-    test('persistent worker supports repeated tasks', () async {
+    test('persistent worker reuses one isolate for sequential tasks', () async {
       final engine = PersistentIsolateEngine();
       addTearDown(engine.dispose);
 
       final firstResult = await engine.process(records);
-      final secondResult = await engine.process(records);
+      final secondRecords = [
+        _record(id: 10, category: 'C', quantity: 4, price: 7),
+        _record(id: 11, category: 'D', quantity: 2, price: 3),
+      ];
+      final secondExpected = const DataProcessor().process(secondRecords);
+      final secondResult = await engine.process(secondRecords);
 
       expect(firstResult, expected);
-      expect(secondResult, expected);
+      expect(secondResult, secondExpected);
       expect(firstResult.metrics!.mode, ProcessingMode.persistentIsolate);
       expect(secondResult.metrics!.mode, ProcessingMode.persistentIsolate);
+      expect(firstResult.metrics!.runNumber, 1);
+      expect(secondResult.metrics!.runNumber, 2);
+      expect(secondResult.metrics!.isolateStartupDuration, Duration.zero);
+      expect(engine.debugWorkerSpawnCount, 1);
+    });
+
+    test('persistent worker close and dispose are idempotent', () async {
+      final engine = PersistentIsolateEngine();
+
+      await engine.process(records);
+      await engine.close();
+      await engine.close();
+      await engine.dispose();
+      await engine.dispose();
+
+      expect(engine.debugWorkerSpawnCount, 1);
+      await expectLater(
+        engine.process(records),
+        throwsA(
+          isA<ProcessingEngineException>().having(
+            (exception) => exception.cause,
+            'cause',
+            isA<StateError>(),
+          ),
+        ),
+      );
+    });
+
+    test('persistent worker survives DataProcessor errors', () async {
+      final engine = PersistentIsolateEngine();
+      addTearDown(engine.dispose);
+
+      await expectLater(
+        engine.process([_record(id: 1, quantity: -1)]),
+        throwsA(
+          isA<ProcessingEngineException>().having(
+            (exception) => exception.cause,
+            'cause',
+            isA<DataProcessingException>(),
+          ),
+        ),
+      );
+
+      final result = await engine.process(records);
+      expect(result, expected);
+      expect(engine.debugWorkerSpawnCount, 1);
+    });
+
+    test('unexpected worker exit completes pending requests', () async {
+      final engine = PersistentIsolateEngine.withWorkerEntrypoint(
+        _exitWhenRequestArrives,
+      );
+      addTearDown(engine.dispose);
+
+      for (var attempt = 1; attempt <= 2; attempt++) {
+        await expectLater(
+          engine.process(records).timeout(const Duration(seconds: 2)),
+          throwsA(
+            isA<ProcessingEngineException>().having(
+              (exception) => exception.cause,
+              'cause',
+              isA<StateError>(),
+            ),
+          ),
+        );
+        expect(engine.debugWorkerSpawnCount, attempt);
+      }
     });
 
     test('engines expose validation failures predictably', () async {
@@ -119,6 +193,15 @@ void main() {
         );
       }
     });
+  });
+}
+
+void _exitWhenRequestArrives(SendPort hostPort) {
+  final commands = ReceivePort();
+  hostPort.send(commands.sendPort);
+  commands.listen((_) {
+    commands.close();
+    Isolate.exit();
   });
 }
 

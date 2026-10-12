@@ -1,32 +1,10 @@
-import 'dart:async';
-import 'dart:convert';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../data/data_record.dart';
-import '../data/dataset_generator.dart';
-import '../data/dataset_importer.dart';
-import '../domain/benchmark_record.dart';
-import '../domain/benchmark_runner.dart';
-import '../domain/processing_engine.dart';
 import '../domain/processing_mode.dart';
 import '../domain/processing_result.dart';
-import '../workers/main_isolate_engine.dart';
-import '../workers/one_shot_isolate_engine.dart';
-import '../workers/persistent_isolate_engine.dart';
 import '../../../ui/ui_heartbeat.dart';
-
-enum AnalyzerViewState { idle, processing, success, error }
-
-typedef ProcessingEngineFactory = ProcessingEngine Function(
-  ProcessingMode mode,
-);
-typedef DatasetGenerationCallback = Future<List<DataRecord>> Function(
-  int seed,
-  int count,
-);
+import 'analyzer_controller.dart';
 
 class AnalyzerPage extends StatefulWidget {
   const AnalyzerPage({
@@ -34,11 +12,13 @@ class AnalyzerPage extends StatefulWidget {
     this.engineFactory,
     this.datasetGenerationCallback,
     this.deviceInfo,
+    this.controller,
   });
 
   final ProcessingEngineFactory? engineFactory;
   final DatasetGenerationCallback? datasetGenerationCallback;
   final String? deviceInfo;
+  final AnalyzerController? controller;
 
   @override
   State<AnalyzerPage> createState() => _AnalyzerPageState();
@@ -51,28 +31,54 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     text: '25000,50000,100000,250000',
   );
   final _repetitionsController = TextEditingController(text: '1');
-  final _runner = const BenchmarkRunner();
-  final _engines = <ProcessingMode, ProcessingEngine>{};
-
-  List<DataRecord> _records = const [];
-  List<BenchmarkRecord> _benchmarks = const [];
-  ProcessingResult? _result;
-  ProcessingMode _selectedMode = ProcessingMode.mainIsolate;
-  AnalyzerViewState _viewState = AnalyzerViewState.idle;
-  String _sourceLabel = 'No dataset loaded';
-  String? _errorMessage;
-  String? _progressMessage;
-  bool _loadingDataset = false;
-  final _modeRuns = <ProcessingMode, int>{};
 
   // ── Live log (hnt) ────────────────────────────────────────────────────────
-  final List<String> _liveLogs = [];
   final ScrollController _logScrollController = ScrollController();
+  late final AnalyzerController _controller;
+  late final bool _ownsController;
+  var _lastLogCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownsController = widget.controller == null;
+    _controller =
+        widget.controller ??
+        AnalyzerController(
+          engineFactory: widget.engineFactory,
+          datasetGenerationCallback: widget.datasetGenerationCallback,
+          deviceInfo: widget.deviceInfo,
+        );
+    _lastLogCount = _controller.liveLogs.length;
+    _controller.addListener(_handleControllerChanged);
+  }
+
+  void _handleControllerChanged() {
+    if (!mounted) {
+      return;
+    }
+    final shouldScrollLog = _lastLogCount != _controller.liveLogs.length;
+    _lastLogCount = _controller.liveLogs.length;
+    setState(() {});
+
+    if (shouldScrollLog) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_logScrollController.hasClients) {
+          _logScrollController.animateTo(
+            _logScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
+  }
 
   @override
   void dispose() {
-    for (final engine in _engines.values) {
-      if (engine is PersistentIsolateEngine) unawaited(engine.close());
+    _controller.removeListener(_handleControllerChanged);
+    if (_ownsController) {
+      _controller.dispose();
     }
     _datasetSizeController.dispose();
     _seedController.dispose();
@@ -83,41 +89,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   }
 
   // ── Live log helpers (hnt) ──────────────────────────────────────────────
-  void _addLog(String message) {
-    if (!mounted) return;
-    setState(() {
-      _liveLogs.add('[${_timestamp()}] $message');
-      if (_liveLogs.length > 100) _liveLogs.removeAt(0);
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_logScrollController.hasClients) {
-        _logScrollController.animateTo(
-          _logScrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  String _timestamp() {
-    final now = DateTime.now();
-    return '${now.hour.toString().padLeft(2, '0')}:'
-        '${now.minute.toString().padLeft(2, '0')}:'
-        '${now.second.toString().padLeft(2, '0')}';
-  }
-
-  ProcessingEngine _engineFor(ProcessingMode mode) {
-    return _engines.putIfAbsent(mode, () {
-      return widget.engineFactory?.call(mode) ??
-          switch (mode) {
-            ProcessingMode.mainIsolate => const MainIsolateEngine(),
-            ProcessingMode.oneShotIsolate => const OneShotIsolateEngine(),
-            ProcessingMode.persistentIsolate => PersistentIsolateEngine(),
-          };
-    });
-  }
-
   int _readPositiveInt(TextEditingController controller, String label) {
     final value = int.tryParse(controller.text.trim());
     if (value == null || value < 1) {
@@ -135,120 +106,22 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   }
 
   Future<void> _generateDataset() async {
-    _addLog('Generating dataset…');
-    setState(() {
-      _loadingDataset = true;
-      _errorMessage = null;
-    });
     try {
       final count = _readPositiveInt(_datasetSizeController, 'Record count');
       final seed = _readSeed();
-      _addLog('Spawning compute isolate — seed=$seed, count=$count');
-      final generated = widget.datasetGenerationCallback != null
-          ? await widget.datasetGenerationCallback!(seed, count)
-          : await compute<(int, int), List<DataRecord>>(_generateRecords, (
-              seed,
-              count,
-            ));
-      if (!mounted) return;
-      _addLog('✓ Dataset ready — ${generated.length} records generated');
-      setState(() {
-        _records = generated;
-        _sourceLabel = 'Generated dataset';
-        _result = null;
-        _viewState = AnalyzerViewState.idle;
-        _loadingDataset = false;
-      });
+      await _controller.generateDataset(seed: seed, count: count);
     } catch (error) {
-      _setError(error);
+      _controller.reportError(error);
     }
   }
 
-  Future<void> _importDataset() async {
-    try {
-      final selection = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['csv', 'json'],
-      );
-      if (selection.isEmpty) return;
-      setState(() {
-        _loadingDataset = true;
-        _errorMessage = null;
-      });
-      final file = selection.single;
-      final content = utf8.decode(await file.xFile.readAsBytes());
-      final format = file.extension?.toLowerCase();
-      if (format != 'csv' && format != 'json') {
-        throw const DatasetImportException('Choose a .csv or .json file.');
-      }
-      final imported = await compute<(String, String), List<DataRecord>>(
-        _parseDataset,
-        (format!, content),
-      );
-      if (!mounted) return;
-      setState(() {
-        _records = imported;
-        _sourceLabel = file.name;
-        _result = null;
-        _viewState = AnalyzerViewState.idle;
-        _loadingDataset = false;
-      });
-    } catch (error) {
-      _setError(error);
-    }
-  }
+  Future<void> _importDataset() => _controller.importDataset();
 
   Future<void> _processDataset() async {
-    if (_records.isEmpty) {
-      _setError(const FormatException('Generate or import a dataset first.'));
-      return;
-    }
-    final int seed;
     try {
-      seed = _readSeed();
+      await _controller.processDataset(seed: _readSeed());
     } catch (error) {
-      _setError(error);
-      return;
-    }
-
-    final mode = _selectedMode;
-    final runNumber = (_modeRuns[mode] ?? 0) + 1;
-    _addLog(
-      '▶ Starting ${_modeLabel(mode)} — ${_records.length} records, run #$runNumber',
-    );
-    setState(() {
-      _viewState = AnalyzerViewState.processing;
-      _errorMessage = null;
-      _progressMessage = 'Processing ${_records.length} records';
-    });
-    await Future<void>.delayed(Duration.zero);
-    try {
-      final result = await _runner.process(
-        records: _records,
-        engine: _engineFor(mode),
-        seed: seed,
-        runNumber: runNumber,
-        deviceInfo: widget.deviceInfo,
-      );
-      if (!mounted) return;
-      final m = result.metrics!;
-      _addLog(
-        '✓ Done — processing: ${_formatDuration(m.processingDuration)}, '
-        'total: ${_formatDuration(m.totalDuration)}, '
-        '${result.statistics.completedRecordCount} completed records',
-      );
-      setState(() {
-        _modeRuns[mode] = runNumber;
-        _result = result;
-        _benchmarks = [
-          ..._benchmarks,
-          BenchmarkRecord(metrics: result.metrics!),
-        ];
-        _viewState = AnalyzerViewState.success;
-        _progressMessage = null;
-      });
-    } catch (error) {
-      _setError(error);
+      _controller.reportError(error);
     }
   }
 
@@ -258,81 +131,27 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           .split(',')
           .map((value) => int.parse(value.trim()))
           .toList(growable: false);
-      if (sizes.isEmpty || sizes.any((size) => size < 1)) {
-        throw const FormatException('Enter comma-separated positive sizes.');
-      }
       final repetitions = _readPositiveInt(
         _repetitionsController,
         'Repetitions',
       );
       final seed = _readSeed();
-      setState(() {
-        _viewState = AnalyzerViewState.processing;
-        _errorMessage = null;
-        _progressMessage = 'Preparing benchmark sweep';
-      });
-      await Future<void>.delayed(Duration.zero);
-      final entries = await _runner.runProtocol(
-        datasetSizes: sizes,
+      await _controller.runBenchmarkSweep(
+        sizes: sizes,
         repetitions: repetitions,
         seed: seed,
-        deviceInfo: widget.deviceInfo,
-        onProgress: (mode, size, run) {
-          if (!mounted) return;
-          setState(() {
-            _progressMessage =
-                '${_modeLabel(mode)} · $size records · run $run/$repetitions';
-          });
-        },
       );
-      if (!mounted) return;
-      setState(() {
-        _benchmarks = [..._benchmarks, ...entries];
-        _result = null;
-        _viewState = AnalyzerViewState.success;
-        _progressMessage = '${entries.length} benchmark runs completed';
-      });
     } catch (error) {
-      _setError(error);
+      _controller.reportError(error);
     }
   }
 
-  Future<void> _exportBenchmarks({required bool asJson}) async {
-    if (_benchmarks.isEmpty) {
-      _setError(const FormatException('Run a benchmark before exporting.'));
-      return;
-    }
-    try {
-      final content = asJson
-          ? BenchmarkRecord.encodeJson(_benchmarks)
-          : BenchmarkRecord.encodeCsv(_benchmarks);
-      final extension = asJson ? 'json' : 'csv';
-      await FilePicker.saveFile(
-        fileName: 'cross_processing_benchmarks.$extension',
-        bytes: Uint8List.fromList(utf8.encode(content)),
-        mimeType: asJson ? 'application/json' : 'text/csv',
-        type: FileType.custom,
-        allowedExtensions: [extension],
-      );
-    } catch (error) {
-      _setError(error);
-    }
-  }
-
-  void _setError(Object error) {
-    if (!mounted) return;
-    _addLog('✗ Error: $error');
-    setState(() {
-      _viewState = AnalyzerViewState.error;
-      _errorMessage = error.toString();
-      _progressMessage = null;
-      _loadingDataset = false;
-    });
-  }
+  Future<void> _exportBenchmarks({required bool asJson}) =>
+      _controller.exportBenchmarks(asJson: asJson);
 
   @override
   Widget build(BuildContext context) {
-    final busy = _viewState == AnalyzerViewState.processing || _loadingDataset;
+    final busy = _controller.busy;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 20,
@@ -377,12 +196,14 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 _buildExecutionPanel(busy),
                 const SizedBox(height: 14),
                 if (busy) _buildStatusPanel(),
-                if (_viewState == AnalyzerViewState.error) _buildErrorPanel(),
-                if (_result != null) _buildResultPanel(_result!),
-                if (_benchmarks.isNotEmpty) _buildBenchmarkPanel(),
+                if (_controller.state == AnalyzerState.error)
+                  _buildErrorPanel(),
+                if (_controller.result != null)
+                  _buildResultPanel(_controller.result!),
+                if (_controller.benchmarks.isNotEmpty) _buildBenchmarkPanel(),
                 const SizedBox(height: 14),
                 _buildFpsPanel(),
-                if (_liveLogs.isNotEmpty) ...[
+                if (_controller.liveLogs.isNotEmpty) ...[
                   const SizedBox(height: 14),
                   _buildLiveLogPanel(),
                 ],
@@ -428,7 +249,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     return _Panel(
       title: '01  Dataset',
       trailing: Text(
-        _sourceLabel,
+        _controller.sourceLabel,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(color: Color(0xFF53655F), fontSize: 12),
       ),
@@ -498,7 +319,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 icon: const Icon(Icons.file_open_outlined),
                 label: const Text('Import CSV / JSON'),
               ),
-              Text('${_records.length} records loaded'),
+              Text('${_controller.records.length} records loaded'),
             ],
           ),
         ],
@@ -524,7 +345,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   Widget _buildExecutionPanel(bool busy) {
     return _Panel(
       title: '02  Execution',
-      trailing: _StateBadge(state: _viewState),
+      trailing: _StateBadge(state: _controller.state),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -547,11 +368,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 icon: Icon(Icons.all_inclusive),
               ),
             ],
-            selected: {_selectedMode},
+            selected: {_controller.selectedMode},
             onSelectionChanged: busy
                 ? null
-                : (selection) =>
-                      setState(() => _selectedMode = selection.first),
+                : (selection) => _controller.selectMode(selection.first),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -674,14 +494,14 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            '${_liveLogs.length} entries',
+            '${_controller.liveLogs.length} entries',
             style: const TextStyle(fontSize: 12, color: Color(0xFF53655F)),
           ),
           const SizedBox(width: 8),
           IconButton(
             tooltip: 'Clear log',
             icon: const Icon(Icons.delete_outline, size: 18),
-            onPressed: () => setState(() => _liveLogs.clear()),
+            onPressed: _controller.clearLog,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
           ),
@@ -697,9 +517,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           child: ListView.builder(
             controller: _logScrollController,
             padding: const EdgeInsets.all(12),
-            itemCount: _liveLogs.length,
+            itemCount: _controller.liveLogs.length,
             itemBuilder: (context, index) {
-              final log = _liveLogs[index];
+              final log = _controller.liveLogs[index];
               final color = log.contains('\u2713')
                   ? const Color(0xFF22C55E)
                   : log.contains('\u2717')
@@ -734,7 +554,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
 
   Widget _buildStatusPanel() {
     return _Panel(
-      title: _loadingDataset ? 'Loading dataset' : 'Processing',
+      title: _controller.state == AnalyzerState.loadingFile
+          ? 'Loading dataset'
+          : 'Processing',
       child: Row(
         children: [
           const SizedBox(
@@ -743,7 +565,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(_progressMessage ?? 'Working')),
+          Expanded(child: Text(_controller.progressMessage ?? 'Working')),
         ],
       ),
     );
@@ -758,7 +580,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         children: [
           const Icon(Icons.error_outline, color: Color(0xFF9E3D32)),
           const SizedBox(width: 10),
-          Expanded(child: Text(_errorMessage ?? 'The operation failed.')),
+          Expanded(
+            child: Text(_controller.errorMessage ?? 'The operation failed.'),
+          ),
         ],
       ),
     );
@@ -769,7 +593,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     final stats = result.statistics;
     return _Panel(
       title: '03  Result',
-      trailing: _StateBadge(state: _viewState),
+      trailing: _StateBadge(state: _controller.state),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -836,10 +660,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
   Widget _buildBenchmarkPanel() {
     return _Panel(
       title: '04  Benchmark log',
-      trailing: Text('${_benchmarks.length} runs'),
+      trailing: Text('${_controller.benchmarks.length} runs'),
       child: Column(
         children: [
-          for (final entry in _benchmarks.reversed.take(8))
+          for (final entry in _controller.benchmarks.reversed.take(8))
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 5),
               child: Row(
@@ -859,20 +683,6 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
       ),
     );
   }
-}
-
-List<DataRecord> _generateRecords((int, int) input) {
-  return const DatasetGenerator().generate(
-    seed: input.$1,
-    numberOfRecords: input.$2,
-  );
-}
-
-List<DataRecord> _parseDataset((String, String) input) {
-  const importer = DatasetImporter();
-  return input.$1 == 'csv'
-      ? importer.fromCsv(input.$2)
-      : importer.fromJson(input.$2);
 }
 
 String _modeLabel(ProcessingMode mode) => switch (mode) {
@@ -964,15 +774,17 @@ class _Metric extends StatelessWidget {
 class _StateBadge extends StatelessWidget {
   const _StateBadge({required this.state});
 
-  final AnalyzerViewState state;
+  final AnalyzerState state;
 
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (state) {
-      AnalyzerViewState.idle => ('Idle', const Color(0xFF53655F)),
-      AnalyzerViewState.processing => ('Processing', const Color(0xFF9A6710)),
-      AnalyzerViewState.success => ('Success', const Color(0xFF167C70)),
-      AnalyzerViewState.error => ('Error', const Color(0xFF9E3D32)),
+      AnalyzerState.idle => ('Idle', const Color(0xFF53655F)),
+      AnalyzerState.loadingFile => ('Loading file', const Color(0xFF9A6710)),
+      AnalyzerState.ready => ('Ready', const Color(0xFF167C70)),
+      AnalyzerState.processing => ('Processing', const Color(0xFF9A6710)),
+      AnalyzerState.success => ('Success', const Color(0xFF167C70)),
+      AnalyzerState.error => ('Error', const Color(0xFF9E3D32)),
     };
     return Text(
       label,

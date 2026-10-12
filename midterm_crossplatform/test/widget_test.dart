@@ -10,6 +10,7 @@ import 'package:midterm_crossplatform/features/analyzer/domain/processing_engine
 import 'package:midterm_crossplatform/features/analyzer/domain/processing_metrics.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/processing_mode.dart';
 import 'package:midterm_crossplatform/features/analyzer/domain/processing_result.dart';
+import 'package:midterm_crossplatform/features/analyzer/presentation/analyzer_controller.dart';
 import 'package:midterm_crossplatform/features/analyzer/presentation/analyzer_page.dart';
 
 void main() {
@@ -18,6 +19,31 @@ void main() {
 
     expect(find.text('Cross Processing Lab'), findsOneWidget);
     expect(find.text('Idle'), findsOneWidget);
+  });
+
+  testWidgets('shows loading file then ready after dataset generation', (
+    tester,
+  ) async {
+    final generation = Completer<List<DataRecord>>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnalyzerPage(
+          datasetGenerationCallback: (_, _) => generation.future,
+          deviceInfo: 'test device',
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byKey(const Key('dataset-size-input')), '2');
+    await tester.tap(find.byKey(const Key('generate-dataset')));
+    await tester.pump();
+
+    expect(find.text('Loading file'), findsOneWidget);
+
+    generation.complete([_record(id: 1), _record(id: 2)]);
+    await _pumpUntilFound(tester, find.text('Ready'));
+
+    expect(find.text('2 records loaded'), findsOneWidget);
   });
 
   testWidgets('shows idle and completes generate-process-result flow', (
@@ -38,6 +64,7 @@ void main() {
     await tester.tap(find.byKey(const Key('generate-dataset')));
     await _pumpUntilFound(tester, find.text('8 records loaded'));
     expect(find.text('8 records loaded'), findsOneWidget);
+    expect(find.text('Ready'), findsOneWidget);
 
     await tester.tap(find.text('One-shot'));
     await tester.ensureVisible(find.byKey(const Key('process-dataset')));
@@ -83,7 +110,17 @@ void main() {
   testWidgets('shows error state when processing has no dataset', (
     tester,
   ) async {
-    await tester.pumpWidget(const MaterialApp(home: AnalyzerPage()));
+    final controller = AnalyzerController(
+      datasetGenerationCallback: _generateInTest,
+      deviceInfo: 'test device',
+    );
+    addTearDown(() async {
+      await controller.close();
+      controller.dispose();
+    });
+    await tester.pumpWidget(
+      MaterialApp(home: AnalyzerPage(controller: controller)),
+    );
     await tester.ensureVisible(find.byKey(const Key('process-dataset')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('process-dataset')));
@@ -94,6 +131,9 @@ void main() {
       find.textContaining('Generate or import a dataset first.'),
       findsOneWidget,
     );
+
+    await controller.generateDataset(seed: 42, count: 1);
+    await _pumpUntilFound(tester, find.text('Ready'));
   });
 }
 
@@ -155,6 +195,19 @@ class _ControlledEngine extends _ImmediateEngine {
 
 Future<List<DataRecord>> _generateInTest(int seed, int count) async {
   return const DatasetGenerator().generate(seed: seed, numberOfRecords: count);
+}
+
+DataRecord _record({required int id}) {
+  return DataRecord(
+    id: id,
+    timestamp: DateTime.utc(2026),
+    category: 'Books',
+    region: 'North',
+    status: 'Completed',
+    quantity: 1,
+    price: 1,
+    processingTime: 1,
+  );
 }
 
 Future<void> _pumpUntilFound(WidgetTester tester, Finder finder) async {
