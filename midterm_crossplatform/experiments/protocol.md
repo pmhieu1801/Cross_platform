@@ -2,6 +2,8 @@
 
 This protocol defines how to collect reproducible evidence for the Midterm research questions. It does not contain measured results. Only measurements produced by an actual run may be placed in `raw/`, `results/`, or `evidence/`.
 
+**Submission scope update, 19 October 2026:** The procedures below are a recommended experiment design, not the assignment's mandatory submission checklist. Existing Android emulator CSVs, frame/CPU captures and Android/Chrome screenshots will be used for the comparison. Further Memory captures, cold-start runs, additional repetitions, physical-device collection and extra profiler exports are deferred until required deliverables are complete. Record unavailable measurements as limitations. Do not infer memory improvements or physical-phone performance from current evidence.
+
 ## 1. Session record
 
 Before each experiment session, create a plain-text or Markdown session note beside the raw export and record:
@@ -103,7 +105,22 @@ The persistent mode must reuse one worker throughout its recorded sequence. For 
 
 ## 8. Experiment 4: cross-platform functional validation
 
-Validate dataset generation/import, all three processing modes, business-result equivalence, repeat processing, benchmark export, and safe shutdown on Android and iOS when hardware is available. Record the device and OS for each validation.
+The planned functional targets are Android and Chrome. Record the device,
+OS, and browser version where applicable for each validation. Check generation,
+CSV/JSON import, malformed input, picker cancellation, recovery after an error,
+repeat processing and benchmark export on both targets.
+
+On Android, validate all three processing modes, business-result equivalence
+and safe worker shutdown. Use Android for isolate-performance comparisons.
+
+On Chrome, validate Main mode and confirm that One-shot and Persistent controls
+are disabled in both processing and benchmark selection, with the web limitation
+visible. Compare Main business results with Android using the same seed and
+record count or the same imported file. Flutter web does not support Dart
+isolates, and compute does not offload browser work. Web runs must not be
+labelled as isolate runs or used as native-isolate performance evidence.
+
+Additional iOS validation is optional when hardware is available.
 
 An iOS Simulator may be used for functional checks only. Do not claim iPhone performance, responsiveness, memory, or comparative timing from Simulator measurements. If physical iOS hardware is unavailable, report that limitation explicitly instead of inferring results.
 

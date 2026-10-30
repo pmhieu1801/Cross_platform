@@ -1,178 +1,189 @@
-# DataFlow: Concurrent Large Data Analyzer in Flutter
+# DataFlow / Cross Processing Lab
 
-DataFlow is a three-week Midterm project for studying concurrency and background processing in Flutter. It runs one deterministic data-analysis pipeline in three execution modes so their responsiveness and runtime overhead can be compared without changing the business algorithm.
+A Flutter demo comparing the same CPU-bound analysis on the main isolate,
+a one-shot isolate (`Isolate.run()`), and one reusable worker (`Isolate.spawn()`).
 
-No benchmark or profiler claims are included in this repository unless they are backed by captured experiment artifacts.
+## Requirements and setup
 
-## Course topic and Midterm scope
+- Validated toolchain: **Flutter 3.47.0 / Dart 3.13.0**. The project requires
+  Dart `^3.13.0`; an older Flutter SDK that bundles older Dart will not resolve it.
+- Chrome for web, or Android Studio/Android SDK and an emulator or device for Android.
+- Internet access on first setup to download Flutter/Gradle dependencies.
+- On Windows, enable Developer Mode if Flutter reports that plugins require
+  symlink support.
 
-The course topic is **Concurrency and Background Processing in Flutter: Isolates, Event Loops, and Responsive Applications**.
-
-The Midterm covers a synchronous main-isolate baseline, a one-shot isolate, one reusable persistent isolate, deterministic dataset generation, CSV/JSON import, raw benchmark export, UI responsiveness observation, and a reproducible evidence protocol. It intentionally excludes worker pools, multiple parallel workers, priorities, scheduling systems, backpressure, chunking, streaming huge files, advanced cancellation, database persistence, WorkManager, BGTaskScheduler, and other OS background-service integrations.
-
-## Research questions
-
-1. How does CPU-heavy work on the main isolate affect UI responsiveness?
-2. How much responsiveness improvement and overhead does `Isolate.run()` introduce?
-3. How does a persistent worker compare with a one-shot isolate for repeated workloads?
-4. How do workload size and isolate message passing affect execution?
-5. When are `async`/`await`, one-shot isolates, persistent isolates, and platform-managed background services appropriate?
-
-## Architecture
-
-```text
-AnalyzerPage
-  -> AnalyzerController / BenchmarkRunner
-  -> ProcessingEngine
-  -> MainIsolateEngine / OneShotIsolateEngine / PersistentIsolateEngine
-  -> shared DataProcessor
-  -> ProcessingResult
-  -> ProcessingMetrics
-  -> UI
-```
-
-`AnalyzerController` owns presentation state, loaded data, engine lifecycle, processing actions, and benchmark coordination. `BenchmarkRunner` adds reproducibility metadata and raw timing records. Every engine delegates business work to the same `DataProcessor`; timing metadata is kept separate from business-result equality.
-
-## Processing pipeline
-
-All modes execute the same locked pipeline:
-
-```text
-Validate
-  -> Filter status == "Completed"
-  -> Group by category
-  -> Aggregate
-  -> Sort by total revenue descending
-  -> Statistics
-```
-
-Revenue is calculated as `quantity * price`. It is not stored as a `DataRecord` field.
-
-## DataRecord schema
-
-| Field | Type |
-| --- | --- |
-| `id` | `int` |
-| `timestamp` | `DateTime` / ISO-8601 text when imported |
-| `category` | `String` |
-| `region` | `String` |
-| `status` | `String` |
-| `quantity` | `int` |
-| `price` | `double` |
-| `processingTime` | `double` |
-
-Repository samples are available in [`assets/sample_data`](assets/sample_data). They are file-picker fixtures and are not registered as bundled Flutter assets.
-
-## Processing modes
-
-- **Main Isolate:** `MainIsolateEngine` calls the shared processor synchronously on Flutter's UI isolate. Its blocking behavior is deliberate and provides the jank baseline.
-- **One-shot isolate:** `OneShotIsolateEngine` uses `Isolate.run()`. A temporary isolate performs one request and terminates, allowing one-shot startup and message-passing overhead to be studied.
-- **Persistent isolate:** `PersistentIsolateEngine` creates exactly one reusable worker with `Isolate.spawn()` and communicates through `SendPort` and `ReceivePort`. It handles initialization, sequential requests, processing errors, unexpected exit, and idempotent cleanup.
-
-`async`/`await` alone does not provide parallel CPU execution. A Dart isolate also is not an OS-managed background service and does not guarantee continued work after the operating system suspends or terminates the app.
-
-## Prerequisites
-
-- Flutter stable SDK and a supported target toolchain.
-- Android Studio/Android SDK for Android development.
-- macOS with Xcode for iOS builds and physical-iPhone performance collection.
-- A connected device or configured emulator/simulator for platform runs.
-
-The repository currently targets Dart `^3.13.0` in `pubspec.yaml`. The validated development toolchain for this revision is Flutter 3.47.0 with Dart 3.13.0. Confirm the active installation with:
+Run these commands **inside `midterm_crossplatform`**, not the repository root:
 
 ```sh
 flutter --version
-dart --version
 flutter doctor
-```
-
-## Setup and running
-
-Install locked dependencies without removing `pubspec.lock`:
-
-```sh
 flutter pub get
+flutter devices
 ```
 
-Run in normal debug mode:
+Keep `pubspec.lock` so dependencies resolve from the committed lock file.
+There is no backend, login, API key, or machine-specific configuration to copy.
+Flutter generates local SDK paths and Android Gradle wrapper files when needed.
+Build directories and tool caches are intentionally excluded from Git.
+
+## Run
+
+Android: replace `ANDROID_DEVICE_ID` with the ID from `flutter devices`.
 
 ```sh
-flutter run
+flutter run -d ANDROID_DEVICE_ID
 ```
 
-Run a profile build for performance evidence:
+For Android performance observations, use profile mode:
 
 ```sh
-flutter run --profile
+flutter run --profile -d ANDROID_DEVICE_ID
 ```
 
-Run an optimized release build:
+Chrome functional demo:
 
 ```sh
-flutter run --release
+flutter run -d chrome
 ```
 
-Use `flutter devices` and add `-d <device-id>` when more than one target is available. Debug timings must not be compared with profile or release timings.
+Android supports **Main, One-shot, and Persistent**. Chrome supports **Main
+only**: isolate mode controls and benchmarks are disabled on web. `compute()`
+also runs on the browser main thread, so generation, parsing, and processing
+can delay browser input and animation. Start with the web default of 1,000 records.
+Use Android for isolate comparisons. Do not compare debug timings with profile
+or release timings.
 
-## Dataset generation and import
+Other platform folders are included as Flutter source scaffolding; their presence
+alone does not establish that those platforms have been built or tested.
 
-To generate deterministic data in the application:
+## Demo steps
 
-1. Enter a whole-number seed, such as `42`.
-2. Enter the record count or select one of the preset sizes.
-3. Select **Generate**.
+1. Enter seed `42` and a record count such as `1000`, then select **Generate**.
+2. Select **Main** and process the dataset.
+3. On Android, process the same data with **One-shot** and **Persistent**;
+   compare business results separately from timing metrics.
+4. Select **Import CSV / JSON** and choose `assets/sample_data/sample.csv` or
+   `assets/sample_data/sample.json` from the device/browser file picker.
+5. Use the benchmark mode selectors, sizes, repetitions, and warm-up controls
+   to run a sweep. Export actual records as CSV or JSON.
+6. Check error recovery with an invalid record count or malformed import.
 
-The same seed and record count produce the same records in the same order. Keep both values unchanged across compared processing modes.
+The sample files are file-picker fixtures, not bundled Flutter assets. Copy
+one onto the Android device if you want to import it there. Generation works
+without importing any file.
 
-To test file import, select **Import CSV / JSON** and choose [`sample.csv`](assets/sample_data/sample.csv), [`sample.json`](assets/sample_data/sample.json), or another file that uses exactly the documented schema. JSON may be a root array or an object containing a `records` array; the included sample uses a root array.
+## Architecture and processing
 
-## Tests and analysis
+```text
+AnalyzerPage
+  -> AnalyzerController (ChangeNotifier)
+  -> BenchmarkRunner / ProcessingEngine
+  -> MainIsolateEngine / OneShotIsolateEngine / PersistentIsolateEngine
+  -> DataProcessor
+  -> ProcessingResult + ProcessingMetrics
+```
 
-Run formatting, static analysis, and all unit/widget tests:
+The page listens to controller notifications and rebuilds its UI. All three
+engines use one shared pipeline:
+
+```text
+Validate -> filter Completed -> group by category -> aggregate
+         -> sort by revenue descending -> statistics
+```
+
+Revenue is `quantity * price`. Main processes synchronously; One-shot uses
+`Isolate.run()`; Persistent reuses one worker and exchanges requests/results
+through ports with request IDs and completers. The persistent worker processes
+requests sequentially and cleans up its ports on disposal.
+
+CSV requires the following columns (order may vary); JSON accepts a root
+array or an object containing a `records` array:
+
+| Field | Value |
+| --- | --- |
+| `id` | Integer |
+| `timestamp` | ISO-8601 date/time |
+| `category`, `region`, `status` | Non-empty strings |
+| `quantity` | Non-negative integer |
+| `price`, `processingTime` | Non-negative finite numbers |
+
+`processingTime` in an input record is a data attribute, not a measured runtime.
+Empty datasets and malformed records are rejected.
+
+Packages: `csv` parses CSV, `file_picker` handles import/export dialogs, and
+`device_info_plus` supplies benchmark device metadata. Exact versions are in
+`pubspec.lock`.
+
+## Checks
 
 ```sh
-dart format .
+dart format --output=none --set-exit-if-changed lib test integration_test
 flutter analyze
 flutter test
 ```
 
-List devices and run the integration flow on a selected target:
+The default suite includes native isolate tests. For focused browser coverage:
 
 ```sh
-flutter devices
-flutter test integration_test/analyzer_flow_test.dart -d <device-id>
+flutter test --platform chrome test/web_platform_flow_test.dart
 ```
 
-Integration tests require a runnable target and are separate from the default `flutter test` suite.
+The integration flow requires an Android target:
 
-## Android APK
+```sh
+flutter test integration_test/analyzer_flow_test.dart -d ANDROID_DEVICE_ID
+```
 
-Build a release APK with:
+Automated tests do not replace manual file-picker/download checks or device
+performance measurements.
+
+## Android release APK
 
 ```sh
 flutter build apk --release
 ```
 
-Flutter writes the APK under `build/app/outputs/flutter-apk/`. Build output is intentionally ignored by Git.
+Output: `build/app/outputs/flutter-apk/app-release.apk`. Build output is not
+committed. Install it with the device's package installer or Android SDK tools:
 
-## Reproducing benchmarks
+```sh
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
 
-Follow [`experiments/protocol.md`](experiments/protocol.md) before collecting any measurements. In summary:
+The application ID is `com.example.midterm_crossplatform`; its launcher label is
+**midterm_crossplatform**, and its screen title is **Cross Processing Lab**.
+The release build uses the development signing key for the classroom sideloaded demo.
 
-1. Use the same physical device, Flutter build mode, app revision, seed, dataset size, configuration, warm-up policy, and recorded run count for each comparison.
-2. Record Flutter/Dart versions, platform/device, OS, build mode, seed, workload size, repetitions, and warm-up policy.
-3. Use the benchmark sweep to run controlled warm-ups and recorded executions. Warm-ups are not exported as result rows.
-4. Export untouched CSV or JSON output from the app.
-5. Collect Performance Timeline, Frame Chart, CPU Profile, and memory evidence from Flutter DevTools where required.
+## Experiment data and evidence
 
-Store untouched benchmark exports and their session notes in [`experiments/raw`](experiments/raw). Store derived tables or charts in [`experiments/results`](experiments/results). Place genuine profiler captures, screenshots, and captured test logs under [`evidence`](evidence). Do not add fabricated measurements, screenshots, memory values, FPS values, or profiler output.
+The submission evidence is included in `experiments/` and `evidence/`:
 
-## Known Midterm limitations
+- [Raw CSV exports](experiments/raw/README.md): the size sweep and a separate
+  repeated-workload experiment.
+- [Measured comparison](experiments/results/MEASURED_RESULTS.md): conditions,
+  timing definitions, derived tables, source hashes, and interpretation limits.
+- [Collection protocol](experiments/protocol.md): setup and reproduction steps.
+- [Profiler captures](evidence/profiler/README.md) and
+  [Android/Chrome screenshots](evidence/screenshots/README.md).
+- [Source validation summary](evidence/tests/VALIDATION.md).
 
-- Only one persistent worker is used; there is no worker pool or parallel task scheduler.
-- Processing is in-memory and does not stream or chunk very large files.
-- There is no database persistence, advanced cancellation, pause/resume, or backpressure.
-- The UI heartbeat is observational; formal frame evidence must be captured with DevTools.
-- Performance varies by device, OS, build mode, workload, and thermal state. Results cannot be generalized without real evidence.
-- iOS Simulator runs may support functional validation but must not be presented as iPhone performance evidence.
-- Isolates are process-internal concurrency tools, not WorkManager/BGTaskScheduler-style background services. Work is not guaranteed to survive application suspension or termination.
+To repeat the size sweep on Android, use profile mode, seed 42, sizes
+`25000,50000,100000,250000`, five recorded repetitions, one warm-up per
+mode/size, and all three modes. Export the resulting CSV. For the separate
+repeated-workload experiment, select One-shot and Persistent only, size
+`100000`, ten repetitions, and one warm-up. Keep the exports separate and
+record the actual device, SDK, build mode, app revision, and run conditions.
+
+The existing timing exports were collected on an Android emulator, not a
+physical phone. Original capture dates and exact committed experiment revisions
+were not preserved. New runs can differ; do not relabel existing captures as
+results from a new run or from today's validation.
+
+## Scope and limitations
+
+There is one persistent worker, no worker pool, streaming/chunking, task
+cancellation, database, or OS-managed background service. Isolates do not
+ensure work survives app suspension or termination. UI heartbeat values are
+observations; use a profiler for frame timing. Report drafts, video scripts,
+and packaging helpers are excluded from this repository. Captured experiments
+support the report but are not application runtime dependencies.

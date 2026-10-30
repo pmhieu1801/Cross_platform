@@ -32,12 +32,16 @@ class AnalyzerController extends ChangeNotifier {
     this.engineFactory,
     this.datasetGenerationCallback,
     this.deviceInfo,
-  });
+    this.isWeb = kIsWeb,
+  }) : _benchmarkModes = Set.unmodifiable(
+         isWeb ? [ProcessingMode.mainIsolate] : ProcessingMode.values,
+       );
 
   final BenchmarkRunner benchmarkRunner;
   final ProcessingEngineFactory? engineFactory;
   final DatasetGenerationCallback? datasetGenerationCallback;
   final String? deviceInfo;
+  final bool isWeb;
   final Map<ProcessingMode, ProcessingEngine> _engines = {};
   final Map<ProcessingMode, int> _modeRuns = {};
 
@@ -46,6 +50,7 @@ class AnalyzerController extends ChangeNotifier {
   List<String> _liveLogs = const [];
   ProcessingResult? _result;
   ProcessingMode _selectedMode = ProcessingMode.mainIsolate;
+  Set<ProcessingMode> _benchmarkModes;
   AnalyzerState _state = AnalyzerState.idle;
   String _sourceLabel = 'No dataset loaded';
   String? _errorMessage;
@@ -58,6 +63,7 @@ class AnalyzerController extends ChangeNotifier {
   List<String> get liveLogs => _liveLogs;
   ProcessingResult? get result => _result;
   ProcessingMode get selectedMode => _selectedMode;
+  Set<ProcessingMode> get benchmarkModes => _benchmarkModes;
   AnalyzerState get state => _state;
   String get sourceLabel => _sourceLabel;
   String? get errorMessage => _errorMessage;
@@ -65,11 +71,31 @@ class AnalyzerController extends ChangeNotifier {
   bool get busy =>
       _state == AnalyzerState.loadingFile || _state == AnalyzerState.processing;
 
+  bool supportsMode(ProcessingMode mode) =>
+      !isWeb || mode == ProcessingMode.mainIsolate;
+
   void selectMode(ProcessingMode mode) {
-    if (busy || mode == _selectedMode) {
+    if (busy || !supportsMode(mode) || mode == _selectedMode) {
       return;
     }
     _selectedMode = mode;
+    _notify();
+  }
+
+  void setBenchmarkModeSelected(ProcessingMode mode, bool selected) {
+    if (busy ||
+        !supportsMode(mode) ||
+        _benchmarkModes.contains(mode) == selected) {
+      return;
+    }
+
+    final modes = _benchmarkModes.toSet();
+    if (selected) {
+      modes.add(mode);
+    } else {
+      modes.remove(mode);
+    }
+    _benchmarkModes = Set.unmodifiable(modes);
     _notify();
   }
 
@@ -83,7 +109,11 @@ class AnalyzerController extends ChangeNotifier {
 
     _beginLoading('Generating dataset…');
     _appendLog('Generating dataset…');
-    _appendLog('Spawning compute isolate — seed=$seed, count=$count');
+    _appendLog(
+      isWeb
+          ? 'Generating on the browser main thread — seed=$seed, count=$count'
+          : 'Spawning compute isolate — seed=$seed, count=$count',
+    );
     _notify();
 
     try {
@@ -211,8 +241,21 @@ class AnalyzerController extends ChangeNotifier {
     required List<int> sizes,
     required int repetitions,
     required int seed,
+    required List<ProcessingMode> modes,
     int warmUpRuns = 1,
   }) async {
+    if (modes.isEmpty) {
+      reportError(const FormatException('Select at least one benchmark mode.'));
+      return;
+    }
+    if (modes.any((mode) => !supportsMode(mode))) {
+      reportError(
+        UnsupportedError(
+          'Dart isolates are unavailable on web. Select Main only.',
+        ),
+      );
+      return;
+    }
     if (sizes.isEmpty || sizes.any((size) => size < 1)) {
       reportError(
         const FormatException('Enter comma-separated positive sizes.'),
@@ -246,6 +289,7 @@ class AnalyzerController extends ChangeNotifier {
         repetitions: repetitions,
         warmUpRuns: warmUpRuns,
         seed: seed,
+        modes: modes,
         deviceInfo: deviceInfo,
         onProgress: (mode, size, run) {
           if (_disposed) {

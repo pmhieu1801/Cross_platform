@@ -1,0 +1,4 @@
+# Preserve original measurement exports byte-for-byte across platforms.
+/midterm_crossplatform/experiments/raw/*.csv -text whitespace=cr-at-eol
+/midterm_crossplatform/evidence/profiler/*.json -text
+/midterm_crossplatform/evidence/**/*.png -text

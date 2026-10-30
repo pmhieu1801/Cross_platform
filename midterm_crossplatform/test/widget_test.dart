@@ -66,7 +66,12 @@ void main() {
     expect(find.text('8 records loaded'), findsOneWidget);
     expect(find.text('Ready'), findsOneWidget);
 
-    await tester.tap(find.text('One-shot'));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('processing-mode')),
+        matching: find.text('One-shot'),
+      ),
+    );
     await tester.ensureVisible(find.byKey(const Key('process-dataset')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('process-dataset')));

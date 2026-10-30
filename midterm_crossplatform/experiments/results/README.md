@@ -1,5 +1,6 @@
 # Derived results
 
-Place tables or charts derived from preserved files in `../raw/` here. Document the source files and calculation method for every artifact.
-
-No result table or performance claim is committed as part of the infrastructure setup.
+[MEASURED_RESULTS.md](MEASURED_RESULTS.md) contains tables calculated from the
+two preserved CSV exports in `../raw/`, with environment details, units,
+calculation instructions, source hashes, and limitations. No synthetic timing
+rows are used. Measurements from the two experiments remain separate.

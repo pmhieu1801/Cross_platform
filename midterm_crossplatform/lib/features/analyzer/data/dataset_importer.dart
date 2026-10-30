@@ -55,6 +55,9 @@ class DatasetImporter {
           }),
         );
       }
+      if (records.isEmpty) {
+        throw const FormatException('CSV dataset contains no records.');
+      }
       const DataProcessor().validate(records);
       return List.unmodifiable(records);
     } on FormatException catch (error) {
@@ -82,6 +85,9 @@ class DatasetImporter {
           throw FormatException('JSON record ${index + 1} must be an object.');
         }
         records.add(DataRecord.fromJson(row));
+      }
+      if (records.isEmpty) {
+        throw const FormatException('JSON dataset contains no records.');
       }
       const DataProcessor().validate(records);
       return List.unmodifiable(records);

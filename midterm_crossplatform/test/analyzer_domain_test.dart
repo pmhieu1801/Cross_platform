@@ -84,6 +84,14 @@ void main() {
         () => importer.fromCsv('"unterminated'),
         throwsA(isA<DatasetImportException>()),
       );
+      expect(
+        () => importer.fromJson('[]'),
+        throwsA(isA<DatasetImportException>()),
+      );
+      expect(
+        () => importer.fromCsv(DatasetImporter.fields.join(',')),
+        throwsA(isA<DatasetImportException>()),
+      );
     });
   });
 

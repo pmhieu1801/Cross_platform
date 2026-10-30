@@ -1,0 +1,12 @@
+# Local workspace and separately prepared submission artifacts.
+/tmp/
+/submission/
+/.vscode/
+
+# Internal planning and helper files, not part of the application source.
+/midterm_crossplatform/CONTRIBUTING.md
+/midterm_crossplatform/PROJECT_TRACKER.md
+/midterm_crossplatform/VIDEO_PLAN.md
+/midterm_crossplatform/VIDEO_SCRIPT.md
+/midterm_crossplatform/tool/
+/midterm_crossplatform/build_debug_log.txt

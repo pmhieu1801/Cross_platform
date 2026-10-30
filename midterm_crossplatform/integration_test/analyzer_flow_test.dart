@@ -13,17 +13,32 @@ void main() {
 
     await tester.enterText(find.byKey(const Key('dataset-size-input')), '128');
     await tester.tap(find.byKey(const Key('generate-dataset')));
-    await tester.pumpAndSettle();
+    await _pumpUntilFound(tester, find.text('128 records loaded'));
     expect(find.text('128 records loaded'), findsOneWidget);
 
-    await tester.tap(find.text('One-shot'));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('processing-mode')),
+        matching: find.text('One-shot'),
+      ),
+    );
     await tester.ensureVisible(find.byKey(const Key('process-dataset')));
-    await tester.pumpAndSettle();
+    await tester.pump();
     await tester.tap(find.byKey(const Key('process-dataset')));
-    await tester.pumpAndSettle();
+    await _pumpUntilFound(tester, find.text('Completed'));
 
     expect(find.text('Success'), findsWidgets);
     expect(find.textContaining('128 records'), findsOneWidget);
     expect(find.text('Completed'), findsOneWidget);
   });
+}
+
+Future<void> _pumpUntilFound(WidgetTester tester, Finder finder) async {
+  for (var attempt = 0; attempt < 100 && finder.evaluate().isEmpty; attempt++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(finder, findsOneWidget);
 }

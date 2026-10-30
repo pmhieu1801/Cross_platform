@@ -50,6 +50,10 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
           datasetGenerationCallback: widget.datasetGenerationCallback,
           deviceInfo: widget.deviceInfo,
         );
+    if (_controller.isWeb) {
+      _datasetSizeController.text = '1000';
+      _sizesController.text = '1000';
+    }
     _lastLogCount = _controller.liveLogs.length;
     _controller.addListener(_handleControllerChanged);
   }
@@ -154,6 +158,7 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         sizes: sizes,
         repetitions: repetitions,
         seed: seed,
+        modes: _controller.benchmarkModes.toList(growable: false),
         warmUpRuns: warmUpRuns,
       );
     } catch (error) {
@@ -366,27 +371,68 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
         children: [
           SegmentedButton<ProcessingMode>(
             key: const Key('processing-mode'),
-            segments: const [
-              ButtonSegment(
+            segments: [
+              const ButtonSegment(
                 value: ProcessingMode.mainIsolate,
                 label: Text('Main'),
                 icon: Icon(Icons.phone_android_outlined),
               ),
               ButtonSegment(
                 value: ProcessingMode.oneShotIsolate,
-                label: Text('One-shot'),
-                icon: Icon(Icons.rocket_launch_outlined),
+                label: const Text('One-shot'),
+                icon: const Icon(Icons.rocket_launch_outlined),
+                enabled: _controller.supportsMode(
+                  ProcessingMode.oneShotIsolate,
+                ),
               ),
               ButtonSegment(
                 value: ProcessingMode.persistentIsolate,
-                label: Text('Persistent'),
-                icon: Icon(Icons.all_inclusive),
+                label: const Text('Persistent'),
+                icon: const Icon(Icons.all_inclusive),
+                enabled: _controller.supportsMode(
+                  ProcessingMode.persistentIsolate,
+                ),
               ),
             ],
             selected: {_controller.selectedMode},
             onSelectionChanged: busy
                 ? null
                 : (selection) => _controller.selectMode(selection.first),
+          ),
+          if (_controller.isWeb) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Web supports Main mode only. Dart isolates are unavailable in '
+              'the browser, so One-shot and Persistent are disabled. Generation, '
+              'import and processing run on the main thread and may pause the '
+              'interface for large datasets. Start with 1,000 records; use '
+              'Android for isolate comparisons.',
+              key: Key('web-platform-notice'),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                'Benchmark modes',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              for (final mode in ProcessingMode.values)
+                FilterChip(
+                  key: Key('benchmark-mode-${mode.name}'),
+                  label: Text(_benchmarkModeLabel(mode)),
+                  selected: _controller.benchmarkModes.contains(mode),
+                  onSelected: busy || !_controller.supportsMode(mode)
+                      ? null
+                      : (selected) => _controller.setBenchmarkModeSelected(
+                          mode,
+                          selected,
+                        ),
+                ),
+            ],
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -473,7 +519,9 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
     return _Panel(
       title: '05  UI Thread Monitor',
       trailing: const Tooltip(
-        message: 'Isolate mode keeps FPS ~60.\nMain-thread mode blocks the event loop \u2192 FPS drops.',
+        message:
+            'Observed frame callbacks. Use profiling tools for frame timing; '
+            'this monitor does not guarantee a particular FPS.',
         child: Icon(Icons.info_outline, size: 16, color: Color(0xFF53655F)),
       ),
       child: Row(
@@ -495,11 +543,14 @@ class _AnalyzerPageState extends State<AnalyzerPage> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '\u2022 One-shot / Persistent Isolate: heavy work runs off the main thread \u2014 '
-                  'the AnimationController keeps ticking, FPS stays ~60.\n\n'
-                  '\u2022 Main Isolate: the synchronous DataProcessor.process() blocks the '
-                  'event loop \u2014 frames cannot be scheduled, FPS drops to 0 until the '
-                  'call returns.',
+                  _controller.isWeb
+                      ? 'Main mode runs on the browser main thread. Large workloads '
+                            'can delay animation and input. The monitor updates after '
+                            'the main thread becomes available; it is not a profiler.'
+                      : 'One-shot and Persistent move processing off the UI isolate. '
+                            'Main runs synchronously and can delay animation and input. '
+                            'Actual responsiveness depends on workload and device; '
+                            'validate it with DevTools frame timing.',
                   style: Theme.of(context).textTheme.bodySmall
                       ?.copyWith(color: const Color(0xFF53655F), height: 1.6),
                 ),
@@ -714,6 +765,12 @@ String _modeLabel(ProcessingMode mode) => switch (mode) {
   ProcessingMode.mainIsolate => 'Main isolate',
   ProcessingMode.oneShotIsolate => 'One-shot isolate',
   ProcessingMode.persistentIsolate => 'Persistent isolate',
+};
+
+String _benchmarkModeLabel(ProcessingMode mode) => switch (mode) {
+  ProcessingMode.mainIsolate => 'Main',
+  ProcessingMode.oneShotIsolate => 'One-shot',
+  ProcessingMode.persistentIsolate => 'Persistent',
 };
 
 String _formatDuration(Duration duration) {
